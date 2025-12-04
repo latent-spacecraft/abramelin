@@ -1,6 +1,7 @@
 .venv/
 .DS_Store
 THIS_*
+*egg-info/
 
 # Weights
 *.npz

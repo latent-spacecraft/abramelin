@@ -1,11 +1,14 @@
 /**
  * Protein Alchemy - Main Application Controller
+ *
+ * Features pLDDT-weighted ensemble animation for pseudo-molecular dynamics.
  */
 class ProteinAlchemyApp {
     constructor() {
         this.sessionId = null;
         this.isGenerating = false;
         this.history = [];
+        this.ensembleSize = 1;
 
         this._init();
     }
@@ -26,8 +29,14 @@ class ProteinAlchemyApp {
             window.maskSync.toggle(index);
         };
 
+        // Connect frame change callback for animation display
+        window.viewer3d.onFrameChange = (frame, total) => {
+            document.getElementById('anim-frame').textContent = `${frame + 1}/${total}`;
+        };
+
         // Setup UI event handlers
         this._setupEventHandlers();
+        this._setupAnimationControls();
 
         // Load demo sequence
         this._loadDemoSequence();
@@ -61,7 +70,51 @@ class ProteinAlchemyApp {
             if (e.key === 'Escape') {
                 window.maskSync.clear();
             }
+            // Space to toggle animation
+            if (e.key === ' ' && window.viewer3d.ensemble) {
+                e.preventDefault();
+                this._toggleAnimation();
+            }
         });
+    }
+
+    _setupAnimationControls() {
+        // Play/Pause button
+        document.getElementById('anim-play').addEventListener('click', () => {
+            this._toggleAnimation();
+        });
+
+        // Animation mode selector
+        document.getElementById('anim-mode').addEventListener('change', (e) => {
+            window.viewer3d.setAnimationMode(e.target.value);
+        });
+
+        // Speed slider
+        document.getElementById('anim-speed').addEventListener('input', (e) => {
+            // Invert: higher slider value = slower animation
+            const speed = 550 - parseInt(e.target.value);
+            window.viewer3d.setAnimationSpeed(speed);
+        });
+
+        // Ensemble size input
+        document.getElementById('ensemble-size').addEventListener('change', (e) => {
+            this.ensembleSize = Math.max(1, Math.min(10, parseInt(e.target.value) || 1));
+            e.target.value = this.ensembleSize;
+        });
+    }
+
+    _toggleAnimation() {
+        const isPlaying = window.viewer3d.toggleAnimation();
+        const icon = document.getElementById('anim-play-icon');
+        const controls = document.getElementById('animation-controls');
+
+        icon.textContent = isPlaying ? '⏸' : '▶';
+        controls.classList.toggle('playing', isPlaying);
+    }
+
+    _showAnimationControls(show) {
+        const controls = document.getElementById('animation-controls');
+        controls.classList.toggle('hidden', !show);
     }
 
     /**
@@ -90,21 +143,25 @@ class ProteinAlchemyApp {
     }
 
     /**
-     * Trigger generation (always runs sequence then structure)
+     * Trigger generation (sequence → structure ensemble)
      */
     async generate() {
         if (this.isGenerating) return;
 
         const sequence = window.maskSync.getSequenceWithMasks();
         const maskedCount = window.maskSync.getMaskedIndices().length;
+        const ensembleSize = parseInt(document.getElementById('ensemble-size').value) || 1;
 
-        // Allow generation even without masks (just refold structure)
+        // Stop any running animation
+        window.viewer3d.stopAnimation();
+
         if (maskedCount === 0) {
             this._setStatus('loading', 'Re-folding structure...');
         }
 
         this.isGenerating = true;
         this._showLoading(true, maskedCount > 0 ? 'sequence' : 'structure');
+        this._showAnimationControls(false);
         this._setStatus('loading', 'Starting generation...');
 
         try {
@@ -116,6 +173,7 @@ class ProteinAlchemyApp {
                     sequence: sequence,
                     num_steps: 8,
                     temperature: 1.0,
+                    ensemble_size: ensembleSize,
                     session_id: this.sessionId,
                 }),
             });
@@ -128,25 +186,41 @@ class ProteinAlchemyApp {
             window.wsClient
                 .on('start', (data) => {
                     this._setStatus('loading', 'Starting transmutation...');
+                    if (data.ensemble_size > 1) {
+                        document.getElementById('conf-progress').textContent =
+                            `(Ensemble: 0/${data.ensemble_size})`;
+                    }
                 })
                 .on('phase', (data) => {
-                    // Update phase label
                     const phaseLabel = data.phase === 'sequence' ? 'Sequence' : 'Structure';
                     document.getElementById('phase-label').textContent = phaseLabel;
                     document.getElementById('loading-phase').textContent = data.message;
                     this._setStatus('loading', data.message);
+
+                    // Show conformation progress for ensemble
+                    if (data.total_conformations > 1) {
+                        document.getElementById('conf-progress').textContent =
+                            `(${data.conformation}/${data.total_conformations})`;
+                    }
                 })
                 .on('progress', (data) => {
                     document.getElementById('step-current').textContent = data.step;
                     document.getElementById('step-total').textContent = data.total_steps;
-                    const phase = data.phase === 'sequence' ? 'Sequence' : 'Structure';
-                    this._setStatus('loading', `${phase}: Step ${data.step}/${data.total_steps}`);
+
+                    let statusMsg = `${data.phase === 'sequence' ? 'Sequence' : 'Structure'}: Step ${data.step}/${data.total_steps}`;
+                    if (data.total_conformations > 1) {
+                        statusMsg += ` (Conf ${data.conformation}/${data.total_conformations})`;
+                    }
+                    this._setStatus('loading', statusMsg);
                 })
                 .on('sequence_complete', (data) => {
-                    // Update sequence bar with new sequence (before structure)
                     window.maskSync.setSequence(data.sequence);
                     window.sequenceBar.render(data.sequence, []);
-                    this._setStatus('loading', 'Sequence complete, folding structure...');
+                    this._setStatus('loading', 'Sequence complete, folding structures...');
+                })
+                .on('conformation_ready', (data) => {
+                    // Update progress as each conformation completes
+                    this._setStatus('loading', `Conformation ${data.index + 1} ready (pLDDT: ${(data.avg_plddt * 100).toFixed(1)}%)`);
                 })
                 .on('complete', (data) => {
                     this._onGenerationComplete(data);
@@ -175,9 +249,28 @@ class ProteinAlchemyApp {
             window.sequenceBar.render(data.sequence, data.plddt || []);
         }
 
-        // Update 3D viewer
-        if (data.pdb) {
+        // Handle ensemble vs single structure
+        if (data.ensemble && data.ensemble.pdbs && data.ensemble.pdbs.length > 1) {
+            // Load ensemble for animation
+            window.viewer3d.loadEnsemble(data.ensemble);
+            this._showAnimationControls(true);
+
+            // Update frame display
+            document.getElementById('anim-frame').textContent = `1/${data.ensemble.pdbs.length}`;
+
+            // Auto-start animation
+            setTimeout(() => {
+                window.viewer3d.startAnimation('weighted');
+                document.getElementById('anim-play-icon').textContent = '⏸';
+                document.getElementById('animation-controls').classList.add('playing');
+            }, 500);
+
+            this._setStatus('ready', `Ensemble ready: ${data.ensemble.pdbs.length} conformations (Space to pause)`);
+        } else if (data.pdb) {
+            // Single structure
             window.viewer3d.loadStructure(data.pdb, data.plddt);
+            this._showAnimationControls(false);
+            this._setStatus('ready', 'Generation complete!');
         }
 
         // Add to history
@@ -185,10 +278,9 @@ class ProteinAlchemyApp {
             sequence: data.sequence,
             pdb: data.pdb,
             plddt: data.plddt,
+            ensemble: data.ensemble,
             timestamp: new Date().toISOString(),
         });
-
-        this._setStatus('ready', 'Generation complete!');
     }
 
     /**
@@ -211,6 +303,7 @@ class ProteinAlchemyApp {
         if (show) {
             document.getElementById('step-current').textContent = '0';
             document.getElementById('step-total').textContent = '8';
+            document.getElementById('conf-progress').textContent = '';
             document.getElementById('phase-label').textContent =
                 initialPhase === 'sequence' ? 'Sequence' : 'Structure';
             document.getElementById('loading-phase').textContent =
@@ -247,8 +340,12 @@ class ProteinAlchemyApp {
         // Create history item
         const el = document.createElement('div');
         el.className = 'history-item';
+
+        const ensembleLabel = item.ensemble && item.ensemble.pdbs ?
+            ` (${item.ensemble.pdbs.length} conf)` : '';
+
         el.innerHTML = `
-            <div class="history-item-label">Generation #${this.history.length}</div>
+            <div class="history-item-label">Generation #${this.history.length}${ensembleLabel}</div>
             <div class="history-item-seq">${item.sequence.substring(0, 30)}...</div>
         `;
 
@@ -272,15 +369,21 @@ class ProteinAlchemyApp {
         window.maskSync.setSequence(item.sequence);
         window.sequenceBar.render(item.sequence, item.plddt || []);
 
-        if (item.pdb) {
+        // Handle ensemble vs single
+        if (item.ensemble && item.ensemble.pdbs && item.ensemble.pdbs.length > 1) {
+            window.viewer3d.loadEnsemble(item.ensemble);
+            this._showAnimationControls(true);
+            document.getElementById('anim-frame').textContent = `1/${item.ensemble.pdbs.length}`;
+        } else if (item.pdb) {
             window.viewer3d.loadStructure(item.pdb, item.plddt);
+            this._showAnimationControls(false);
         }
 
         this._setStatus('ready', 'Restored from history');
     }
 
     /**
-     * Show load dialog (simple prompt for now)
+     * Show load dialog
      */
     _showLoadDialog() {
         const sequence = prompt(

@@ -21,6 +21,12 @@ pyproject.toml
 ./esm/models/esmc.py
 ./esm/models/function_decoder.py
 ./esm/models/vqvae.py
+./esm/models/mlx/__init__.py
+./esm/models/mlx/convert.py
+./esm/models/mlx/esm3_mlx.py
+./esm/models/mlx/fused_ops.py
+./esm/models/mlx/layers.py
+./esm/models/mlx/quantize.py
 ./esm/sdk/__init__.py
 ./esm/sdk/api.py
 ./esm/sdk/base_forge_client.py
@@ -75,6 +81,10 @@ pyproject.toml
 ./esm/utils/structure/protein_chain.py
 ./esm/utils/structure/protein_complex.py
 ./esm/utils/structure/protein_structure.py
+./esm/web/__init__.py
+./esm/web/app.py
+./esm/web/api/__init__.py
+./esm/web/core/__init__.py
 ./esm/widgets/components/function_annotator.py
 ./esm/widgets/components/results_visualizer.py
 ./esm/widgets/components/sasa_prompt_selector.py
@@ -125,6 +135,12 @@ esm/models/esm3.py
 esm/models/esmc.py
 esm/models/function_decoder.py
 esm/models/vqvae.py
+esm/models/mlx/__init__.py
+esm/models/mlx/convert.py
+esm/models/mlx/esm3_mlx.py
+esm/models/mlx/fused_ops.py
+esm/models/mlx/layers.py
+esm/models/mlx/quantize.py
 esm/sdk/__init__.py
 esm/sdk/api.py
 esm/sdk/base_forge_client.py
@@ -179,6 +195,10 @@ esm/utils/structure/predicted_aligned_error.py
 esm/utils/structure/protein_chain.py
 esm/utils/structure/protein_complex.py
 esm/utils/structure/protein_structure.py
+esm/web/__init__.py
+esm/web/app.py
+esm/web/api/__init__.py
+esm/web/core/__init__.py
 esm/widgets/components/function_annotator.py
 esm/widgets/components/results_visualizer.py
 esm/widgets/components/sasa_prompt_selector.py

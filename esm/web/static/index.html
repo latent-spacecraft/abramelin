@@ -20,6 +20,11 @@
             <div class="controls">
                 <button id="load-btn" class="btn">ENTER SEQUENCE</button>
                 <button id="clear-btn" class="btn">CLEAR MASKS</button>
+                <label class="ensemble-label">
+                    Ensemble:
+                    <input type="number" id="ensemble-size" class="ensemble-input"
+                           min="1" max="10" value="1" title="Number of conformations to generate">
+                </label>
                 <button id="generate-btn" class="btn btn-primary">
                     TRANSMUTE <kbd><span style="font-size: large;">↵</span></kbd>
                 </button>
@@ -31,12 +36,29 @@
             <!-- 3D Viewer -->
             <section class="viewer-section">
                 <div id="viewer-container"></div>
+
+                <!-- Animation Controls (shown when ensemble loaded) -->
+                <div id="animation-controls" class="animation-controls hidden">
+                    <button id="anim-play" class="btn btn-small" title="Play/Pause (Space)">
+                        <span id="anim-play-icon">▶</span>
+                    </button>
+                    <select id="anim-mode" class="anim-select" title="Animation mode">
+                        <option value="weighted">pLDDT Weighted</option>
+                        <option value="linear">Linear</option>
+                        <option value="backAndForth">Back & Forth</option>
+                    </select>
+                    <input type="range" id="anim-speed" class="anim-slider"
+                           min="50" max="500" value="150" title="Animation speed">
+                    <span id="anim-frame" class="anim-frame">1/1</span>
+                </div>
+
                 <div id="loading-overlay" class="loading-overlay hidden">
                     <div class="loading-spinner"></div>
                     <div class="loading-phase" id="loading-phase">Transmuting...</div>
                     <div class="loading-step">
                         <span id="phase-label">Sequence</span>:
                         Step <span id="step-current">0</span> / <span id="step-total">8</span>
+                        <span id="conf-progress"></span>
                     </div>
                 </div>
             </section>

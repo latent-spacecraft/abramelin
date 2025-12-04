@@ -208,7 +208,7 @@ body {
 .history-section {
     grid-row: 1;
     grid-column: 2;
-    background: var(--bg-secondary);
+    background-image: url('/static/pics/midsole.svg');
     border-bottom: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
@@ -218,7 +218,7 @@ body {
     padding: 12px 16px;
     font-size: 0.9rem;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: whitesmoke;
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -440,7 +440,7 @@ body {
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: var(--text-muted);
+    color: var(--bg-primary);
     text-align: center;
     padding: 40px;
 }
@@ -516,4 +516,108 @@ body {
 
 .sequence-input::placeholder {
     color: var(--text-muted);
+}
+
+/* =========================================================================
+   Animation Controls
+   ========================================================================= */
+
+.animation-controls {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: rgba(30, 30, 50, 0.9);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    z-index: 50;
+}
+
+.animation-controls.hidden {
+    display: none;
+}
+
+.anim-select {
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.anim-slider {
+    width: 80px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.anim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent-purple);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.anim-frame {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    min-width: 40px;
+    text-align: center;
+}
+
+.ensemble-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.ensemble-input {
+    width: 45px;
+    padding: 4px 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.75rem;
+    text-align: center;
+}
+
+/* Conformation progress indicator */
+#conf-progress {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 0.8rem;
+    color: var(--accent-infra);
+}
+
+/* Breathing animation for ensemble display */
+@keyframes breathe {
+    0%, 100% { 
+        box-shadow: 0 0 10px rgba(97, 81, 160, 0.3);
+    }
+    50% { 
+        box-shadow: 0 0 25px rgba(97, 81, 160, 0.6);
+    }
+}
+
+.animation-controls.playing {
+    animation: breathe 2s ease-in-out infinite;
 }

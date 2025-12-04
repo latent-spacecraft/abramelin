@@ -57,6 +57,7 @@ class GenerateRequest(BaseModel):
     num_steps: int = 8
     temperature: float = 1.0
     session_id: Optional[str] = None
+    ensemble_size: int = 1  # Number of conformations to generate
 
 
 class MaskRequest(BaseModel):
@@ -99,6 +100,7 @@ async def start_generation(request: GenerateRequest) -> dict:
         "sequence": request.sequence,
         "num_steps": request.num_steps,
         "temperature": request.temperature,
+        "ensemble_size": request.ensemble_size,
         "status": "pending",
         "result": None,
         "masked_indices": [i for i, c in enumerate(request.sequence) if c == "_"],
@@ -165,13 +167,38 @@ async def get_history(session_id: str) -> dict:
 # WebSocket for Generation Streaming
 # ============================================================================
 
+def get_pdb_and_plddt(protein: ESMProtein) -> tuple[Optional[str], Optional[list[float]]]:
+    """Extract PDB string and pLDDT from protein."""
+    pdb_string = None
+    plddt_list = None
+
+    if protein.coordinates is not None:
+        try:
+            pdb_string = protein.to_protein_chain().to_pdb_string()
+        except Exception as e:
+            print(f"PDB generation error: {e}")
+            try:
+                buffer = io.StringIO()
+                protein.to_pdb(buffer)
+                pdb_string = buffer.getvalue()
+            except Exception as e2:
+                print(f"Fallback PDB error: {e2}")
+
+    if protein.plddt is not None:
+        plddt_list = protein.plddt.tolist()
+
+    return pdb_string, plddt_list
+
+
 @app.websocket("/ws/generate/{session_id}")
 async def websocket_generate(websocket: WebSocket, session_id: str):
     """Stream generation progress via WebSocket.
 
-    Always runs:
-    1. Sequence generation (if there are masks)
-    2. Structure generation (always, to fold the sequence)
+    Generates:
+    1. Sequence (if there are masks)
+    2. Structure ensemble (multiple conformations with different seeds)
+
+    For ensemble_size > 1, returns multiple PDB structures for animation.
     """
     await websocket.accept()
 
@@ -184,6 +211,7 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
     sequence = session["sequence"]
     num_steps = session.get("num_steps", 8)
     temperature = session.get("temperature", 1.0)
+    ensemble_size = session.get("ensemble_size", 1)
     masked_count = sequence.count("_")
 
     try:
@@ -193,6 +221,7 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
             "sequence_length": len(sequence),
             "masked_count": masked_count,
             "num_steps": num_steps,
+            "ensemble_size": ensemble_size,
         })
 
         # Create protein
@@ -208,7 +237,6 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
                 "message": "Generating sequence...",
             })
 
-            # Progress updates for sequence generation
             for step in range(num_steps):
                 await websocket.send_json({
                     "type": "progress",
@@ -218,7 +246,6 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
                 })
                 await asyncio.sleep(0.02)
 
-            # Run sequence generation
             seq_config = GenerationConfig(
                 track="sequence",
                 num_steps=num_steps,
@@ -232,57 +259,70 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
             })
 
         # =====================================================================
-        # Phase 2: Structure Generation (always run)
+        # Phase 2: Structure Ensemble Generation
         # =====================================================================
-        await websocket.send_json({
-            "type": "phase",
-            "phase": "structure",
-            "message": "Folding structure...",
-        })
+        ensemble_pdbs = []
+        ensemble_plddts = []
+        avg_plddts = []  # Average pLDDT per conformation for weighting
 
-        # Progress updates for structure generation
-        for step in range(num_steps):
+        for conf_idx in range(ensemble_size):
             await websocket.send_json({
-                "type": "progress",
+                "type": "phase",
                 "phase": "structure",
-                "step": step + 1,
-                "total_steps": num_steps,
+                "message": f"Folding conformation {conf_idx + 1}/{ensemble_size}...",
+                "conformation": conf_idx + 1,
+                "total_conformations": ensemble_size,
             })
-            await asyncio.sleep(0.02)
 
-        # Run structure generation
-        struct_config = GenerationConfig(
-            track="structure",
-            num_steps=num_steps,
-            temperature=0.7,  # Lower temp for structure
-        )
-        protein = model.generate(protein, struct_config)
+            for step in range(num_steps):
+                await websocket.send_json({
+                    "type": "progress",
+                    "phase": "structure",
+                    "step": step + 1,
+                    "total_steps": num_steps,
+                    "conformation": conf_idx + 1,
+                    "total_conformations": ensemble_size,
+                })
+                await asyncio.sleep(0.02)
 
-        # Get PDB string
-        pdb_string = None
-        plddt_list = None
+            # Generate structure with slight temperature variation for diversity
+            struct_temp = 0.7 + (conf_idx * 0.05)  # 0.7, 0.75, 0.8, ...
+            struct_config = GenerationConfig(
+                track="structure",
+                num_steps=num_steps,
+                temperature=struct_temp,
+            )
 
-        if protein.coordinates is not None:
-            try:
-                pdb_string = protein.to_protein_chain().to_pdb_string()
-            except Exception as e:
-                print(f"PDB generation error: {e}")
-                # Try alternative: write to buffer
-                try:
-                    buffer = io.StringIO()
-                    protein.to_pdb(buffer)
-                    pdb_string = buffer.getvalue()
-                except Exception as e2:
-                    print(f"Fallback PDB error: {e2}")
+            # Create fresh protein for each conformation (same sequence)
+            conf_protein = ESMProtein(sequence=protein.sequence)
+            conf_protein = model.generate(conf_protein, struct_config)
 
-        if protein.plddt is not None:
-            plddt_list = protein.plddt.tolist()
+            pdb_string, plddt_list = get_pdb_and_plddt(conf_protein)
 
-        # Update session
-        session["result"] = protein
-        session["pdb"] = pdb_string
-        session["plddt"] = plddt_list
+            if pdb_string:
+                ensemble_pdbs.append(pdb_string)
+                ensemble_plddts.append(plddt_list or [])
+                avg_plddt = sum(plddt_list) / len(plddt_list) if plddt_list else 0.5
+                avg_plddts.append(avg_plddt)
+
+                # Send each conformation as it's ready
+                await websocket.send_json({
+                    "type": "conformation_ready",
+                    "index": conf_idx,
+                    "pdb": pdb_string,
+                    "plddt": plddt_list,
+                    "avg_plddt": avg_plddt,
+                })
+
+        # Update session with ensemble
         session["sequence"] = protein.sequence
+        session["ensemble"] = {
+            "pdbs": ensemble_pdbs,
+            "plddts": ensemble_plddts,
+            "avg_plddts": avg_plddts,
+        }
+        session["pdb"] = ensemble_pdbs[0] if ensemble_pdbs else None
+        session["plddt"] = ensemble_plddts[0] if ensemble_plddts else None
         session["status"] = "complete"
 
         # Add to history
@@ -290,16 +330,21 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
             session["history"] = []
         session["history"].append({
             "sequence": protein.sequence,
-            "pdb": pdb_string,
-            "plddt": plddt_list,
+            "ensemble": session["ensemble"],
         })
 
-        # Send completion
+        # Send completion with full ensemble
         await websocket.send_json({
             "type": "complete",
             "sequence": protein.sequence,
-            "pdb": pdb_string,
-            "plddt": plddt_list,
+            "ensemble": {
+                "pdbs": ensemble_pdbs,
+                "plddts": ensemble_plddts,
+                "avg_plddts": avg_plddts,
+            },
+            # Also include first structure for backwards compatibility
+            "pdb": ensemble_pdbs[0] if ensemble_pdbs else None,
+            "plddt": ensemble_plddts[0] if ensemble_plddts else None,
         })
 
     except WebSocketDisconnect:
