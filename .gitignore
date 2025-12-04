@@ -1,5 +1,8 @@
-esm.egg-info
-# pixi environments
-.pixi
-*.egg-info
-*.pyc
+.venv/
+.DS_Store
+THIS_*
+
+# Weights
+*.npz
+*.pdb
+CLAUDE.md

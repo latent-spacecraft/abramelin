@@ -58,6 +58,35 @@ class ESMOutput:
     embeddings: torch.Tensor
 
 
+class MPSEmbeddingBag(nn.Module):
+    """MPS-compatible EmbeddingBag replacement using regular Embedding + sum.
+
+    This mimics nn.EmbeddingBag with mode='sum' but works on MPS.
+    The weight parameter is named 'weight' to match nn.EmbeddingBag for state_dict compat.
+    """
+
+    def __init__(self, num_embeddings: int, embedding_dim: int, padding_idx: int = 0):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.padding_idx = padding_idx
+        # Use 'weight' directly as parameter name for state_dict compatibility
+        self.weight = nn.Parameter(torch.empty(num_embeddings, embedding_dim))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.weight)
+        if self.padding_idx is not None:
+            with torch.no_grad():
+                self.weight[self.padding_idx].fill_(0)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # input: (batch, num_tokens)
+        # Embed each token and sum across the num_tokens dimension
+        embedded = nn.functional.embedding(input, self.weight, padding_idx=self.padding_idx)
+        return embedded.sum(dim=-2)  # (batch, dim)
+
+
 class EncodeInputs(nn.Module):
     """
     Module for encoding input features in the ESM-3 model.
@@ -87,7 +116,8 @@ class EncodeInputs(nn.Module):
             [nn.Embedding(260, d_model // 8, padding_idx=0) for _ in range(8)]
         )
 
-        self.residue_embed = nn.EmbeddingBag(1478, d_model, mode="sum", padding_idx=0)
+        # Use MPS-compatible EmbeddingBag replacement
+        self.residue_embed = MPSEmbeddingBag(1478, d_model, padding_idx=0)
 
     def forward(
         self,
@@ -227,10 +257,17 @@ class ESM3(nn.Module, ESM3InferenceClient):
         if not model_name:
             raise ValueError(f"Model name {model_name} is not a valid ESM3 model name.")
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                device = torch.device("cpu")
         model = load_local_model(model_name, device=device)
-        if device.type != "cpu":
+        if device.type == "cuda":
             model = model.to(torch.bfloat16)
+        elif device.type == "mps":
+            model = model.to(torch.float16)  # MPS has better float16 support
         assert isinstance(model, ESM3)
         return model
 
@@ -518,11 +555,17 @@ class ESM3(nn.Module, ESM3InferenceClient):
             # 1.0 if all coordinates at specific indices have valid non-nan values.
             per_res_plddt = input.coordinates.isfinite().all(dim=-1).any(dim=-1).float()
 
+        # Determine autocast dtype based on device
+        if device.type == "cuda":
+            autocast_ctx = torch.autocast(enabled=True, device_type="cuda", dtype=torch.bfloat16)
+        elif device.type == "mps":
+            autocast_ctx = torch.autocast(enabled=True, device_type="mps", dtype=torch.float16)
+        else:
+            autocast_ctx = contextlib.nullcontext()
+
         with (
             torch.no_grad(),  # Assume no gradients for now...
-            torch.autocast(enabled=True, device_type=device.type, dtype=torch.bfloat16)  # type: ignore
-            if device.type == "cuda"
-            else contextlib.nullcontext(),
+            autocast_ctx,
         ):
             output = self.forward(
                 sequence_tokens=input.sequence,

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Abramelin ⛤ Protein Alchemy</title>
+    <link rel="icon" href="/static/pics/abramelin1.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/css/alchemy.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>
+                <img src="/static/pics/abramelin1.svg" alt="Pentacle Logo" width="32"/>
+                ABRAMELIN
+            </h1>
+            <div class="controls">
+                <button id="load-btn" class="btn">ENTER SEQUENCE</button>
+                <button id="clear-btn" class="btn">CLEAR MASKS</button>
+                <button id="generate-btn" class="btn btn-primary">
+                    TRANSMUTE <kbd><span style="font-size: large;">↵</span></kbd>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- 3D Viewer -->
+            <section class="viewer-section">
+                <div id="viewer-container"></div>
+                <div id="loading-overlay" class="loading-overlay hidden">
+                    <div class="loading-spinner"></div>
+                    <div class="loading-phase" id="loading-phase">Transmuting...</div>
+                    <div class="loading-step">
+                        <span id="phase-label">Sequence</span>:
+                        Step <span id="step-current">0</span> / <span id="step-total">8</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- History Panel -->
+            <aside class="history-section">
+                <h3>History</h3>
+                <div id="history-panel" class="history-panel">
+                    <div class="empty-state">
+                        <div class="empty-state-text">
+                            Generated proteins will appear here
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Sequence Bar -->
+            <section class="sequence-section">
+                <div class="sequence-header">
+                    <h3>Sequence <span class="text-muted">(drag to mask, click in 3D view)</span></h3>
+                    <div class="sequence-stats">
+                        <span id="seq-length">0</span> residues,
+                        <span id="mask-count">0</span> masked
+                    </div>
+                </div>
+                <div id="sequence-container" class="sequence-bar"></div>
+                <div class="legend">
+                    <span class="legend-item"><span class="swatch plddt-high"></span> High confidence</span>
+                    <span class="legend-item"><span class="swatch plddt-medium"></span> Medium</span>
+                    <span class="legend-item"><span class="swatch plddt-low"></span> Low confidence</span>
+                    <span class="legend-item"><span class="swatch masked"></span> Masked</span>
+                </div>
+            </section>
+        </main>
+
+        <!-- Status Bar -->
+        <footer class="status-bar">
+            <div id="status-indicator" class="status-indicator"></div>
+            <span id="status-text">Ready</span>
+        </footer>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/maskSync.js"></script>
+    <script src="/static/js/viewer3d.js"></script>
+    <script src="/static/js/sequenceBar.js"></script>
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -82,10 +82,17 @@ class ESMC(nn.Module, ESMCInferenceClient):
         from esm.pretrained import load_local_model
 
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                device = torch.device("cpu")
         model = load_local_model(model_name, device=device)
-        if device.type != "cpu":
+        if device.type == "cuda":
             model = model.to(torch.bfloat16)
+        elif device.type == "mps":
+            model = model.to(torch.float16)  # MPS has better float16 support
         assert isinstance(model, ESMC)
         return model
 
