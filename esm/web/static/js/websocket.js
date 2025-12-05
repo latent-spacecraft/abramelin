@@ -11,6 +11,7 @@ class WebSocketClient {
             progress: null,
             sequence_complete: null,
             conformation_ready: null,
+            function_complete: null,
             complete: null,
             error: null,
         };
@@ -67,6 +68,9 @@ class WebSocketClient {
                 break;
             case 'conformation_ready':
                 if (this.callbacks.conformation_ready) this.callbacks.conformation_ready(data);
+                break;
+            case 'function_complete':
+                if (this.callbacks.function_complete) this.callbacks.function_complete(data);
                 break;
             case 'complete':
                 if (this.callbacks.complete) this.callbacks.complete(data);

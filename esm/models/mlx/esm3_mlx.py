@@ -852,3 +852,140 @@ class ESM3MLX(nn.Module):
             raise ValueError(f"Unsupported track: {config.track}. Use 'sequence' or 'structure'.")
 
         return output
+
+    def predict_function(
+        self,
+        protein: ESMProtein,
+        temperature: float = 1.0,
+        p_none_threshold: float = 0.05,
+    ) -> list:
+        """Predict function annotations from sequence/structure.
+
+        This runs a forward pass through the model and samples function tokens
+        from the function logits, then decodes them to FunctionAnnotation objects.
+
+        Args:
+            protein: ESMProtein with sequence (and optionally structure)
+            temperature: Sampling temperature for function tokens
+            p_none_threshold: Threshold for predicting "no function" at a position
+
+        Returns:
+            List of FunctionAnnotation objects (label, start, end)
+        """
+        import torch
+        from esm.pretrained import load_local_model
+        from esm.utils.constants.models import ESM3_OPEN_SMALL
+        from esm.utils.function.encode_decode import decode_function_tokens
+        from esm.utils.types import FunctionAnnotation
+
+        # Encode protein
+        protein_tensor = self.encode(protein)
+        seq_len = len(protein_tensor.sequence)
+
+        def get_or_default(tensor, default_token, dtype=mx.int32):
+            if tensor is not None:
+                if isinstance(tensor, torch.Tensor):
+                    return mx.array(tensor.numpy(), dtype=dtype)
+                return mx.array(tensor, dtype=dtype)
+            return mx.full((1, seq_len), default_token, dtype=dtype)
+
+        sequence_tokens = get_or_default(protein_tensor.sequence, C.SEQUENCE_MASK_TOKEN)
+        structure_tokens = get_or_default(protein_tensor.structure, C.STRUCTURE_MASK_TOKEN)
+        ss8_tokens = get_or_default(protein_tensor.secondary_structure, C.SS8_PAD_TOKEN)
+        sasa_tokens = get_or_default(protein_tensor.sasa, C.SASA_PAD_TOKEN)
+
+        # Function tokens - use zeros/mask
+        function_tokens = mx.zeros((1, seq_len, 8), dtype=mx.int32)
+        residue_tokens = mx.zeros((1, seq_len, 16), dtype=mx.int32)
+
+        # Ensure batch dimension
+        if len(sequence_tokens.shape) == 1:
+            sequence_tokens = sequence_tokens[None, :]
+        if len(structure_tokens.shape) == 1:
+            structure_tokens = structure_tokens[None, :]
+        if len(ss8_tokens.shape) == 1:
+            ss8_tokens = ss8_tokens[None, :]
+        if len(sasa_tokens.shape) == 1:
+            sasa_tokens = sasa_tokens[None, :]
+
+        average_plddt = mx.ones((1, seq_len))
+        per_res_plddt = mx.zeros((1, seq_len))
+
+        # Forward pass - returns (outputs_dict, cache)
+        print(f"[predict_function] Running forward pass for seq_len={seq_len}")
+        output, _ = self(
+            sequence_tokens,
+            structure_tokens,
+            ss8_tokens,
+            sasa_tokens,
+            function_tokens,
+            residue_tokens,
+            average_plddt,
+            per_res_plddt,
+        )
+
+        # Get function logits: (B, L, 8, 260)
+        function_logits = output["function_logits"]
+        mx.eval(function_logits)
+        print(f"[predict_function] function_logits shape: {function_logits.shape}")
+
+        # Sample from function logits using temperature and p_none threshold
+        # Convert to numpy/torch for compatibility with existing decoder
+        func_logits_np = function_logits[0].tolist()  # (L, 8, 260)
+        func_logits_torch = torch.tensor(func_logits_np, dtype=torch.float32)
+        print(f"[predict_function] func_logits_torch shape: {func_logits_torch.shape}")
+
+        # Sample function tokens using argmax with none-threshold logic
+        # Shape: (L, 8, 260) -> (L, 8)
+        log_p = torch.nn.functional.log_softmax(func_logits_torch / temperature, dim=-1)
+
+        # Check for none predictions
+        none_index = 0  # <none> is typically at index 0 in the function tokenizer
+        log_p_nones = log_p[..., none_index]  # (L, 8)
+        p_none = torch.exp(log_p_nones).mean(dim=-1)  # (L,)
+        where_none = p_none > p_none_threshold
+
+        num_none = where_none.sum().item()
+        print(f"[predict_function] Positions with p_none > {p_none_threshold}: {num_none}/{len(where_none)}")
+
+        # Sample tokens - use argmax for deterministic prediction
+        function_ids = torch.argmax(log_p, dim=-1)  # (L, 8)
+        function_ids[where_none, :] = none_index
+
+        # Remove BOS/EOS
+        function_ids = function_ids[1:-1]  # (L-2, 8)
+        print(f"[predict_function] function_ids shape (after BOS/EOS removal): {function_ids.shape}")
+
+        # Debug: check unique token values
+        unique_tokens = torch.unique(function_ids).tolist()
+        print(f"[predict_function] Unique token values: {unique_tokens[:20]}{'...' if len(unique_tokens) > 20 else ''}")
+
+        # Decode function tokens to annotations
+        # Get function token decoder from PyTorch model (lazy load)
+        if not hasattr(self, '_function_decoder') or self._function_decoder is None:
+            print("[predict_function] Loading function token decoder...")
+            torch_model = load_local_model(ESM3_OPEN_SMALL, device=torch.device("cpu"))
+            self._function_decoder = torch_model.get_function_decoder()
+            print("[predict_function] Function token decoder loaded")
+
+        try:
+            print(f"[predict_function] Decoding function tokens...")
+            annotations = decode_function_tokens(
+                function_ids,
+                function_token_decoder=self._function_decoder,
+                function_tokens_tokenizer=self.tokenizers.function,
+                decoder_annotation_threshold=0.1,
+                annotation_min_length=5,
+                annotation_gap_merge_max=3,
+            )
+            print(f"[predict_function] Decoded {len(annotations)} annotations")
+            for i, ann in enumerate(annotations[:5]):  # Show first 5
+                print(f"  [{i}] {ann.label} ({ann.start}-{ann.end})")
+            if len(annotations) > 5:
+                print(f"  ... and {len(annotations) - 5} more")
+            return annotations
+        except Exception as e:
+            import traceback
+            print(f"[predict_function] Decoding error: {e}")
+            traceback.print_exc()
+            return []

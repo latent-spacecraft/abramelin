@@ -19,8 +19,19 @@ from pydantic import BaseModel
 from esm.models.mlx import ESM3MLX
 from esm.sdk.api import ESMProtein, GenerationConfig
 
-# Global model reference
+# Global model references
 model: Optional[ESM3MLX] = None
+llm_model = None
+llm_tokenizer = None
+
+# Keep-alive: track last usage time
+import time
+_last_model_use = time.time()
+
+def touch_models():
+    """Update last usage timestamp to keep models hot."""
+    global _last_model_use
+    _last_model_use = time.time()
 
 
 @asynccontextmanager
@@ -54,7 +65,7 @@ sessions: dict[str, dict] = {}
 
 class GenerateRequest(BaseModel):
     sequence: str
-    num_steps: int = 8
+    num_steps: int = 16
     temperature: float = 1.0
     session_id: Optional[str] = None
     ensemble_size: int = 1  # Number of conformations to generate
@@ -85,6 +96,18 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def index():
     """Serve the main application."""
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get model status and keep them warm."""
+    touch_models()
+    return {
+        "esm3_loaded": model is not None,
+        "llm_loaded": llm_model is not None,
+        "last_use": _last_model_use,
+        "uptime_seconds": time.time() - _last_model_use,
+    }
 
 
 # ============================================================================
@@ -190,6 +213,60 @@ def get_pdb_and_plddt(protein: ESMProtein) -> tuple[Optional[str], Optional[list
     return pdb_string, plddt_list
 
 
+def summarize_function_annotations(top_labels: list[dict], seq_length: int) -> str:
+    """Use LLM to summarize function annotations into a concise description."""
+    global llm_model, llm_tokenizer
+
+    if not top_labels:
+        return "Unknown function"
+
+    # Lazy load the LLM
+    if llm_model is None:
+        print("[LLM] Loading mlx-community/Llama-3.2-1B-Instruct-4bit...")
+        from mlx_lm import load
+        llm_model, llm_tokenizer = load("mlx-community/Llama-3.2-1B-Instruct-4bit")
+        print("[LLM] Model loaded")
+
+    # Build the prompt with function annotations
+    labels_text = ", ".join([
+        f"{t['label']} ({t['count']}x, {t['total_residues']} residues)"
+        for t in top_labels
+    ])
+
+    prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a protein biochemist. Given function annotations from ESM3, write a single concise sentence describing the protein's possible identity and function. Be specific but brief.
+Only state things that are reasonably confident and sensical.
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Protein length: {seq_length} residues
+Function annotations: {labels_text}
+
+What is this protein?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+This protein is possibly"""
+
+    try:
+        from mlx_lm import generate
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            verbose=False,
+        )
+        # Clean up response
+        summary = "This protein is " + response.strip()
+        # Remove any trailing incomplete sentences
+        if summary and summary[-1] not in ".!?":
+            last_period = summary.rfind(".")
+            if last_period > 20:
+                summary = summary[:last_period + 1]
+
+        print(f"[LLM] Summary: {summary}")
+        return summary
+    except Exception as e:
+        print(f"[LLM] Error: {e}")
+        # Fallback to simple concatenation
+        return f"Predicted functions: {', '.join(t['label'] for t in top_labels[:3])}"
+
+
 @app.websocket("/ws/generate/{session_id}")
 async def websocket_generate(websocket: WebSocket, session_id: str):
     """Stream generation progress via WebSocket.
@@ -209,12 +286,15 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
 
     session = sessions[session_id]
     sequence = session["sequence"]
-    num_steps = session.get("num_steps", 8)
+    num_steps = session.get("num_steps", 16)
     temperature = session.get("temperature", 1.0)
     ensemble_size = session.get("ensemble_size", 1)
     masked_count = sequence.count("_")
 
     try:
+        # Keep models warm
+        touch_models()
+
         # Send initial status
         await websocket.send_json({
             "type": "start",
@@ -314,7 +394,95 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
                     "avg_plddt": avg_plddt,
                 })
 
-        # Update session with ensemble
+        # =====================================================================
+        # Phase 3: Function Prediction
+        # =====================================================================
+        print(f"[WebSocket] Starting function prediction phase...")
+        await websocket.send_json({
+            "type": "phase",
+            "phase": "function",
+            "message": "Predicting function annotations...",
+        })
+
+        function_annotations = []
+        total_annotation_count = 0
+        function_summary = ""
+        try:
+            # Create protein with structure for function prediction
+            # Use first conformation if we have one
+            print(f"[WebSocket] ensemble_pdbs count: {len(ensemble_pdbs) if ensemble_pdbs else 0}")
+            if ensemble_pdbs:
+                # For function prediction, we only need sequence (structure optional)
+                print(f"[WebSocket] Creating protein with sequence: {protein.sequence[:50]}...")
+                func_protein = ESMProtein(sequence=protein.sequence)
+                print(f"[WebSocket] Calling model.predict_function...")
+                annotations = model.predict_function(func_protein)
+                print(f"[WebSocket] Got {len(annotations)} annotations")
+
+                # Convert FunctionAnnotation objects to dicts
+                all_annotations = [
+                    {
+                        "label": ann.label,
+                        "start": ann.start,  # 1-indexed
+                        "end": ann.end,      # 1-indexed, inclusive
+                    }
+                    for ann in annotations
+                ]
+
+                # Aggregate by label and count occurrences
+                from collections import Counter
+                label_counts = Counter(ann.label for ann in annotations)
+
+                # Get top 5 most frequent labels with their total coverage
+                top_labels = []
+                for label, count in label_counts.most_common(5):
+                    # Find all regions for this label
+                    regions = [(ann.start, ann.end) for ann in annotations if ann.label == label]
+                    # Calculate total coverage
+                    total_residues = sum(end - start + 1 for start, end in regions)
+                    top_labels.append({
+                        "label": label,
+                        "count": count,
+                        "regions": regions,
+                        "total_residues": total_residues,
+                    })
+
+                print(f"[WebSocket] Top labels: {[t['label'] for t in top_labels]}")
+
+                # Generate LLM summary of function annotations
+                await websocket.send_json({
+                    "type": "phase",
+                    "phase": "summary",
+                    "message": "Generating protein description...",
+                })
+
+                function_summary = summarize_function_annotations(
+                    top_labels,
+                    len(protein.sequence)
+                )
+
+                # Send both detailed and aggregated
+                function_annotations = top_labels  # Use aggregated for display
+                total_annotation_count = len(all_annotations)
+
+                await websocket.send_json({
+                    "type": "function_complete",
+                    "annotations": top_labels,
+                    "all_annotations": all_annotations,  # Full list if needed
+                    "total_count": total_annotation_count,
+                    "count": len(top_labels),
+                    "summary": function_summary,
+                })
+        except Exception as e:
+            print(f"Function prediction error: {e}")
+            await websocket.send_json({
+                "type": "function_complete",
+                "annotations": [],
+                "count": 0,
+                "error": str(e),
+            })
+
+        # Update session with ensemble and function
         session["sequence"] = protein.sequence
         session["ensemble"] = {
             "pdbs": ensemble_pdbs,
@@ -323,6 +491,7 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
         }
         session["pdb"] = ensemble_pdbs[0] if ensemble_pdbs else None
         session["plddt"] = ensemble_plddts[0] if ensemble_plddts else None
+        session["function_annotations"] = function_annotations
         session["status"] = "complete"
 
         # Add to history
@@ -331,9 +500,10 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
         session["history"].append({
             "sequence": protein.sequence,
             "ensemble": session["ensemble"],
+            "function_annotations": function_annotations,
         })
 
-        # Send completion with full ensemble
+        # Send completion with full ensemble and function annotations
         await websocket.send_json({
             "type": "complete",
             "sequence": protein.sequence,
@@ -345,6 +515,9 @@ async def websocket_generate(websocket: WebSocket, session_id: str):
             # Also include first structure for backwards compatibility
             "pdb": ensemble_pdbs[0] if ensemble_pdbs else None,
             "plddt": ensemble_plddts[0] if ensemble_plddts else None,
+            "function_annotations": function_annotations,
+            "total_count": total_annotation_count,
+            "function_summary": function_summary,
         })
 
     except WebSocketDisconnect:

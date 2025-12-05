@@ -43,6 +43,32 @@ class ProteinAlchemyApp {
 
         // Update status
         this._setStatus('ready', 'Ready - Mask residues and press Enter to regenerate');
+
+        // Keep models warm with periodic pings (every 2 minutes)
+        this._startKeepAlive();
+    }
+
+    /**
+     * Keep models warm with periodic status checks
+     */
+    _startKeepAlive() {
+        // Ping immediately to warm up
+        this._pingStatus();
+
+        // Then every 2 minutes
+        setInterval(() => {
+            this._pingStatus();
+        }, 2 * 60 * 1000);
+    }
+
+    async _pingStatus() {
+        try {
+            const response = await fetch('/api/status');
+            const status = await response.json();
+            console.log('[KeepAlive] Models warm:', status);
+        } catch (e) {
+            console.warn('[KeepAlive] Ping failed:', e);
+        }
     }
 
     _setupEventHandlers() {
@@ -101,6 +127,47 @@ class ProteinAlchemyApp {
             this.ensembleSize = Math.max(1, Math.min(10, parseInt(e.target.value) || 1));
             e.target.value = this.ensembleSize;
         });
+
+        // GIF Export button
+        document.getElementById('export-gif-btn').addEventListener('click', () => {
+            this._exportGif();
+        });
+    }
+
+    /**
+     * Export animation as GIF
+     */
+    _exportGif() {
+        const btn = document.getElementById('export-gif-btn');
+        const originalText = btn.textContent;
+
+        btn.textContent = '⏳ 0%';
+        btn.disabled = true;
+
+        window.viewer3d.exportGif(
+            // Progress callback
+            (progress) => {
+                btn.textContent = `⏳ ${Math.round(progress * 100)}%`;
+            },
+            // Complete callback
+            (blobUrl) => {
+                btn.textContent = originalText;
+                btn.disabled = false;
+
+                // Create download link
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `protein_ensemble_${Date.now()}.gif`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                // Clean up blob URL after download
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+                this._setStatus('ready', 'GIF exported successfully!');
+            }
+        );
     }
 
     _toggleAnimation() {
@@ -222,6 +289,24 @@ class ProteinAlchemyApp {
                     // Update progress as each conformation completes
                     this._setStatus('loading', `Conformation ${data.index + 1} ready (pLDDT: ${(data.avg_plddt * 100).toFixed(1)}%)`);
                 })
+                .on('function_complete', (data) => {
+                    // Update status with function prediction count
+                    const count = data.count || 0;
+                    console.log('[function_complete] Received:', data);
+                    console.log('[function_complete] Summary:', data.summary);
+                    this._setStatus('loading', `Function prediction: ${count} annotations found`);
+
+                    // Display function annotations immediately when received
+                    const seqLen = window.maskSync.sequence?.length || 0;
+                    if (data.annotations && data.annotations.length > 0) {
+                        this._displayFunctionAnnotations(
+                            data.annotations,
+                            seqLen,
+                            data.total_count || data.annotations.length,
+                            data.summary || ''
+                        );
+                    }
+                })
                 .on('complete', (data) => {
                     this._onGenerationComplete(data);
                 })
@@ -260,7 +345,7 @@ class ProteinAlchemyApp {
 
             // Auto-start animation
             setTimeout(() => {
-                window.viewer3d.startAnimation('weighted');
+                window.viewer3d.startAnimation('randomWalk');
                 document.getElementById('anim-play-icon').textContent = '⏸';
                 document.getElementById('animation-controls').classList.add('playing');
             }, 500);
@@ -273,12 +358,27 @@ class ProteinAlchemyApp {
             this._setStatus('ready', 'Generation complete!');
         }
 
+        // Display function annotations with LLM summary
+        if (data.function_annotations && data.function_annotations.length > 0) {
+            this._displayFunctionAnnotations(
+                data.function_annotations,
+                data.sequence.length,
+                data.total_count || data.function_annotations.length,
+                data.function_summary || ''
+            );
+        } else {
+            this._displayFunctionAnnotations([], 0, 0, '');
+        }
+
         // Add to history
         this._addToHistory({
             sequence: data.sequence,
             pdb: data.pdb,
             plddt: data.plddt,
             ensemble: data.ensemble,
+            function_annotations: data.function_annotations || [],
+            function_summary: data.function_summary || '',
+            total_count: data.total_count || 0,
             timestamp: new Date().toISOString(),
         });
     }
@@ -379,7 +479,137 @@ class ProteinAlchemyApp {
             this._showAnimationControls(false);
         }
 
+        // Restore function annotations with summary
+        if (item.function_annotations && item.function_annotations.length > 0) {
+            this._displayFunctionAnnotations(
+                item.function_annotations,
+                item.sequence.length,
+                item.total_count || item.function_annotations.length,
+                item.function_summary || ''
+            );
+        } else {
+            this._displayFunctionAnnotations([], 0, 0, '');
+        }
+
         this._setStatus('ready', 'Restored from history');
+    }
+
+    /**
+     * Display function annotations as tags with LLM summary
+     */
+    _displayFunctionAnnotations(annotations, sequenceLength, totalCount = 0, summary = '') {
+        const panel = document.getElementById('function-panel');
+        const countEl = document.getElementById('function-count');
+
+        if (!panel) return;  // Panel not in DOM yet
+
+        // Update count (show total if available)
+        if (countEl) {
+            countEl.textContent = totalCount || annotations.length;
+        }
+
+        // Clear panel
+        panel.innerHTML = '';
+
+        if (!annotations || annotations.length === 0) {
+            panel.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-text">
+                        No function annotations predicted
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
+        // Add LLM summary at the top if available
+        if (summary) {
+            const summaryEl = document.createElement('div');
+            summaryEl.className = 'function-summary';
+            summaryEl.innerHTML = `<span class="summary-icon">✨</span> ${summary}`;
+            panel.appendChild(summaryEl);
+        }
+
+        // Create tags container
+        const tagsContainer = document.createElement('div');
+        tagsContainer.className = 'function-tags';
+
+        // Render each annotation as a tag
+        annotations.forEach(ann => {
+            const tag = this._createFunctionTag(ann, sequenceLength);
+            tagsContainer.appendChild(tag);
+        });
+
+        panel.appendChild(tagsContainer);
+
+        // Add total count note if there are more
+        if (totalCount > annotations.length) {
+            const moreNote = document.createElement('div');
+            moreNote.className = 'function-more-note';
+            moreNote.textContent = `Showing top ${annotations.length} of ${totalCount} annotations`;
+            panel.appendChild(moreNote);
+        }
+    }
+
+    /**
+     * Create a function tag element
+     */
+    _createFunctionTag(annotation, sequenceLength) {
+        const tag = document.createElement('div');
+        tag.className = 'function-tag';
+
+        // Calculate coverage percentage
+        const coverage = annotation.total_residues
+            ? ((annotation.total_residues / sequenceLength) * 100).toFixed(0)
+            : '?';
+
+        // Determine tag color based on label type
+        const isIPR = annotation.label.includes('IPR');
+        if (isIPR) {
+            tag.classList.add('tag-domain');
+        } else {
+            tag.classList.add('tag-keyword');
+        }
+
+        // Format label nicely
+        let displayLabel = annotation.label;
+        if (displayLabel.length > 25) {
+            displayLabel = displayLabel.substring(0, 22) + '...';
+        }
+
+        tag.innerHTML = `
+            <span class="tag-label">${displayLabel}</span>
+            <span class="tag-count">×${annotation.count || 1}</span>
+            <span class="tag-coverage">${coverage}%</span>
+        `;
+
+        tag.title = `${annotation.label}\n${annotation.count || 1} region(s), ${coverage}% coverage\nClick to highlight`;
+
+        // Click to highlight all regions
+        tag.addEventListener('click', () => {
+            if (annotation.regions) {
+                // Highlight all regions for this label
+                annotation.regions.forEach(([start, end]) => {
+                    this._highlightRange(start - 1, end - 1);
+                });
+            } else if (annotation.start && annotation.end) {
+                this._highlightRange(annotation.start - 1, annotation.end - 1);
+            }
+        });
+
+        return tag;
+    }
+
+    /**
+     * Highlight a range in the sequence bar
+     */
+    _highlightRange(start, end) {
+        // Flash the range in the sequence bar
+        const residues = document.querySelectorAll('.residue');
+        for (let i = start; i <= end && i < residues.length; i++) {
+            residues[i].classList.add('highlighted');
+            setTimeout(() => residues[i].classList.remove('highlighted'), 1500);
+        }
     }
 
     /**
