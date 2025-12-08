@@ -55,7 +55,8 @@ This fork replaces PyTorch with [MLX](https://github.com/ml-explore/mlx) for nat
 from esm.models.mlx import ESM3MLX
 from esm.sdk.api import ESMProtein, GenerationConfig
 
-model = ESM3MLX.from_pretrained("esm3-open")
+# Load from HuggingFace (auto-downloads and caches)
+model = ESM3MLX.from_pretrained("taontronic/esm3-open-mlx")
 
 # Mask unknown positions with underscores
 protein = ESMProtein(sequence="MKTAY____QRQISFVK")

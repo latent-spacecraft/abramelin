@@ -279,7 +279,10 @@ class ESM3MLX(nn.Module):
         """Load pretrained weights.
 
         Args:
-            model_name: Model name ("esm3-open") or path to .npz weights file
+            model_name: One of:
+                - "esm3-open" (default) - loads from local cache or converts from PyTorch
+                - HuggingFace repo like "taontronic/esm3-open-mlx"
+                - Local path to .npz weights file
 
         Returns:
             ESM3MLX model with loaded weights
@@ -297,7 +300,16 @@ class ESM3MLX(nn.Module):
         )
 
         # Determine weights path
-        if model_name in ("esm3-open", "esm3_open", "esm3-open-small"):
+        if "/" in model_name and not os.path.exists(model_name):
+            # HuggingFace repo format: "user/repo"
+            from huggingface_hub import hf_hub_download
+            print(f"Downloading MLX weights from HuggingFace: {model_name}")
+            weights_path = hf_hub_download(
+                repo_id=model_name,
+                filename="esm3_mlx_weights.npz",
+            )
+            print(f"Downloaded to: {weights_path}")
+        elif model_name in ("esm3-open", "esm3_open", "esm3-open-small"):
             # Look for converted weights in common locations
             search_paths = [
                 "esm3_mlx_weights.npz",

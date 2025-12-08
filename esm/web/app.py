@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     """Load model on startup."""
     global model
     print("Loading ESM3MLX model...")
-    model = ESM3MLX.from_pretrained("esm3_mlx_weights.npz")
+    model = ESM3MLX.from_pretrained("taontronic/esm3-open-mlx")
     print(f"Model loaded on device: {model.device}")
     yield
     # Cleanup if needed
