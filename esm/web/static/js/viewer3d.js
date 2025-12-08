@@ -1126,9 +1126,10 @@ class Viewer3D {
             return;
         }
 
-        // Create GIF encoder (workerless mode to avoid CORS)
+        // Create GIF encoder with local worker script
         const gif = new GIF({
-            workers: 0,  // Disable workers to avoid CORS issues
+            workers: 2,
+            workerScript: '/static/js/gif.worker.js',
             quality: 10,
             width: canvas.width,
             height: canvas.height,
@@ -1151,8 +1152,17 @@ class Viewer3D {
 
         let capturedFrames = 0;
 
+        // Timeout safety (30 seconds max for export)
+        let exportTimeout = setTimeout(() => {
+            console.error('GIF export timed out');
+            gif.abort();
+            if (onComplete) onComplete(null);
+            if (wasAnimating) this.startAnimation();
+        }, 30000);
+
         // Set up completion handler before starting
         gif.on('finished', (blob) => {
+            clearTimeout(exportTimeout);
             console.log('GIF finished, size:', blob.size);
             const url = URL.createObjectURL(blob);
             if (onComplete) onComplete(url);
@@ -1165,6 +1175,14 @@ class Viewer3D {
 
         gif.on('progress', (p) => {
             if (onProgress) onProgress(0.5 + p * 0.5);  // Second half of progress
+        });
+
+        // Error handler
+        gif.on('error', (err) => {
+            clearTimeout(exportTimeout);
+            console.error('GIF export error:', err);
+            if (onComplete) onComplete(null);
+            if (wasAnimating) this.startAnimation();
         });
 
         // Capture each keyframe and its forward transition

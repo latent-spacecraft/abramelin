@@ -154,6 +154,11 @@ class ProteinAlchemyApp {
                 btn.textContent = originalText;
                 btn.disabled = false;
 
+                if (!blobUrl) {
+                    this._setStatus('error', 'GIF export failed or timed out');
+                    return;
+                }
+
                 // Create download link
                 const a = document.createElement('a');
                 a.href = blobUrl;
