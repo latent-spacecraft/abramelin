@@ -1,0 +1,28 @@
+#!/bin/bash
+# Abramelin Postinstall Script
+# Runs after the package is installed
+
+set -e
+
+# Installation directory
+INSTALL_DIR="/Applications/Abramelin.app"
+
+# Make launcher executable
+chmod +x "$INSTALL_DIR/Contents/MacOS/Abramelin"
+
+# Create symlink for command-line access (optional)
+CLI_LINK="/usr/local/bin/abramelin"
+if [[ -d "/usr/local/bin" ]]; then
+    rm -f "$CLI_LINK" 2>/dev/null || true
+    ln -sf "$INSTALL_DIR/Contents/MacOS/Abramelin" "$CLI_LINK" 2>/dev/null || true
+fi
+
+# Clear quarantine attribute if present
+xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
+
+# Log installation
+LOG_DIR="$HOME/Library/Logs/Abramelin"
+mkdir -p "$LOG_DIR"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Abramelin installed successfully" >> "$LOG_DIR/install.log"
+
+exit 0

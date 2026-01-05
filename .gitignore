@@ -1,11 +1,43 @@
-*/__pycache__
+# Python
+*/__pycache__/
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
-.DS_Store
-THIS_*
-*egg-info/
+venv/
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Weights
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+THIS_*
+CLAUDE.md
+.claude/
+
+# Dev/benchmark scripts (local only)
+dev/
+
+# Build artifacts
+packaging/build/
+packaging/dist/
+
+# Generated files
 *.npz
 *.pdb
-CLAUDE.md
+pixi.lock
+
+# Logs
+*.log

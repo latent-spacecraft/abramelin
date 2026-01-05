@@ -21,6 +21,10 @@ class Viewer3D {
         this.animationMode = 'weighted'; // 'linear', 'backAndForth', 'weighted'
         this.transitionMatrix = null;   // For Markov chain animation
 
+        // Selected/highlighted residues with side chains
+        this.selectedResidues = new Set();
+        this.highlightedResidues = new Set();  // For function annotation hover
+
         // Smooth morphing state
         this.keyframeIndices = [];      // Which frames in the trajectory are original keyframes
         this.interpolatedFrameCount = 0; // Total frames after interpolation
@@ -119,6 +123,9 @@ class Viewer3D {
             if (atom && atom.resi !== undefined) {
                 const residueIndex = atom.resi - 1;  // Convert to 0-indexed
 
+                // Toggle side chain display for this residue
+                this._toggleSideChain(residueIndex);
+
                 // Emit click event
                 if (this.onResidueClick) {
                     this.onResidueClick(residueIndex);
@@ -128,6 +135,120 @@ class Viewer3D {
                 this._showResidueLabel(atom);
             }
         });
+    }
+
+    /**
+     * Toggle side chain display for a residue
+     */
+    _toggleSideChain(residueIndex) {
+        const resi = residueIndex + 1;  // 1-indexed for PDB
+
+        if (this.selectedResidues.has(residueIndex)) {
+            // Hide side chain
+            this.selectedResidues.delete(residueIndex);
+            this.viewer.setStyle(
+                { resi: resi },
+                { cartoon: { color: this._getResidueColor(residueIndex) } }
+            );
+        } else {
+            // Show side chain with stick representation
+            this.selectedResidues.add(residueIndex);
+            this.viewer.setStyle(
+                { resi: resi },
+                {
+                    cartoon: { color: this._getResidueColor(residueIndex) },
+                    stick: {
+                        colorscheme: 'default',
+                        radius: 0.15,
+                    }
+                }
+            );
+        }
+
+        this.viewer.render();
+    }
+
+    /**
+     * Get color for a residue based on current state
+     */
+    _getResidueColor(residueIndex) {
+        const maskedIndices = window.maskSync?.getMaskedIndices() || [];
+        if (maskedIndices.includes(residueIndex)) {
+            return '#b12e74';  // Masked color
+        }
+        if (this.plddt && this.plddt[residueIndex] !== undefined) {
+            return this._plddtToColor(this.plddt[residueIndex]);
+        }
+        return 'gray';
+    }
+
+    /**
+     * Show side chains for a range of residues (used for function annotation hover)
+     */
+    highlightResiduesWithSideChains(indices, color = '#df8f02') {
+        // Clear previous highlights
+        this.clearHighlights();
+
+        // Store highlighted residues
+        this.highlightedResidues = new Set(indices);
+
+        // Apply highlight with side chains
+        indices.forEach(idx => {
+            const resi = idx + 1;  // 1-indexed
+            this.viewer.setStyle(
+                { resi: resi },
+                {
+                    cartoon: {
+                        color: color,
+                        opacity: 1.0,
+                    },
+                    stick: {
+                        colorscheme: 'default',
+                        radius: 0.15,
+                    }
+                }
+            );
+        });
+
+        // Zoom to highlighted region if more than a few residues
+        if (indices.length >= 3 && indices.length <= 50) {
+            const resis = indices.map(i => i + 1);
+            this.viewer.zoomTo({ resi: resis }, 500);  // 500ms animation
+        }
+
+        this.viewer.render();
+    }
+
+    /**
+     * Clear residue highlights (restore original styling)
+     */
+    clearHighlights() {
+        if (this.highlightedResidues.size === 0) return;
+
+        // Restore original styling
+        this.highlightedResidues.forEach(idx => {
+            const resi = idx + 1;
+            const color = this._getResidueColor(idx);
+
+            // Check if residue had a selected side chain
+            if (this.selectedResidues.has(idx)) {
+                this.viewer.setStyle(
+                    { resi: resi },
+                    {
+                        cartoon: { color: color },
+                        stick: { colorscheme: 'default', radius: 0.15 }
+                    }
+                );
+            } else {
+                this.viewer.setStyle(
+                    { resi: resi },
+                    { cartoon: { color: color } }
+                );
+            }
+        });
+
+        this.highlightedResidues.clear();
+        this.viewer.render();
     }
 
     /**

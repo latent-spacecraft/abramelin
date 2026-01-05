@@ -103,9 +103,14 @@
             <section class="sequence-section">
                 <div class="sequence-header">
                     <h3>Sequence <span class="text-muted">(drag to mask, click in 3D view)</span></h3>
-                    <div class="sequence-stats">
-                        <span id="seq-length">0</span> residues,
-                        <span id="mask-count">0</span> masked
+                    <div class="sequence-actions">
+                        <button id="copy-fasta-btn" class="btn btn-small" title="Copy sequence as FASTA">
+                            📋 FASTA
+                        </button>
+                        <div class="sequence-stats">
+                            <span id="seq-length">0</span> residues,
+                            <span id="mask-count">0</span> masked
+                        </div>
                     </div>
                 </div>
                 <div id="sequence-container" class="sequence-bar"></div>

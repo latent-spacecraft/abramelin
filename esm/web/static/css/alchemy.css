@@ -352,6 +352,12 @@ body {
 .function-tag:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    background: var(--bg-hover);
+    border-color: var(--accent-infra);
+}
+
+.function-tag:hover .tag-label {
+    color: var(--accent-infra-light);
 }
 
 .function-tag.tag-keyword {
@@ -488,9 +494,22 @@ body {
     color: var(--text-secondary);
 }
 
+.sequence-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .sequence-stats {
     font-size: 0.75rem;
     color: var(--text-muted);
+}
+
+/* Copy FASTA button success state */
+#copy-fasta-btn.copied {
+    background: #16a21f;
+    color: white;
+    border-color: #16a21f;
 }
 
 /* Sequence Bar */

@@ -13,14 +13,24 @@ A fork of [EvolutionaryScale's ESM3](https://github.com/evolutionaryscale/esm) o
 
 ## Quickstart
 
-```bash
-# Install dependencies
-pip install -e .
+### One-Line Install (Apple Silicon)
 
-# Launch the web interface
-python -m esm.web.app
-# Open http://localhost:8000
+```bash
+pip install git+https://github.com/gtaghon/abramelin.git && python -m esm.web.app
 ```
+
+Then open http://localhost:8000 in your browser.
+
+### Install from Source
+
+```bash
+git clone https://github.com/gtaghon/abramelin.git
+cd abramelin
+pip install -e .
+python -m esm.web.app
+```
+
+> **Note:** Requires Python 3.12 and an Apple Silicon Mac (M1/M2/M3/M4). On first run, ESM3 model weights (~5GB) will be downloaded from HuggingFace.
 
 ## Web Interface
 

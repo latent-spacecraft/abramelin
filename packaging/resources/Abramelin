@@ -1,0 +1,179 @@
+#!/bin/bash
+# Abramelin Launcher Script
+# This script launches the Abramelin protein design workbench
+
+# Don't exit on error - we handle errors ourselves
+set +e
+
+# Get the directory where the app bundle is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_BUNDLE="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
+VENV_DIR="$RESOURCES_DIR/venv"
+ESM_DIR="$RESOURCES_DIR/esm"
+LOG_DIR="$HOME/Library/Logs/Abramelin"
+
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/abramelin-$(date +%Y%m%d-%H%M%S).log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+error_dialog() {
+    osascript -e "display dialog \"$1\" with title \"Abramelin Error\" buttons {\"OK\"} default button \"OK\" with icon stop"
+}
+
+info_dialog() {
+    osascript -e "display dialog \"$1\" with title \"Abramelin\" buttons {\"OK\"} default button \"OK\" with icon note"
+}
+
+progress_dialog() {
+    osascript -e "display notification \"$1\" with title \"Abramelin\""
+}
+
+# Check for Apple Silicon
+if [[ "$(uname -m)" != "arm64" ]]; then
+    error_dialog "Abramelin requires Apple Silicon (M1/M2/M3/M4). This Mac appears to have an Intel processor."
+    exit 1
+fi
+
+# Check macOS version (need 14.0+ for latest MLX)
+MACOS_VERSION=$(sw_vers -productVersion | cut -d. -f1)
+if [[ "$MACOS_VERSION" -lt 14 ]]; then
+    error_dialog "Abramelin requires macOS 14 (Sonoma) or later. Please update your macOS."
+    exit 1
+fi
+
+log "Starting Abramelin..."
+log "App Bundle: $APP_BUNDLE"
+log "Resources: $RESOURCES_DIR"
+
+# Check if virtual environment exists and is valid
+VENV_VALID=false
+if [[ -f "$VENV_DIR/bin/python" ]]; then
+    # Check if Python version matches and mlx is installed
+    if "$VENV_DIR/bin/python" -c "import mlx; import fastapi" 2>/dev/null; then
+        VENV_VALID=true
+        log "Virtual environment is valid"
+    else
+        log "Virtual environment exists but is incomplete, will reinstall"
+    fi
+fi
+
+# Setup virtual environment if needed
+if [[ "$VENV_VALID" != "true" ]]; then
+    log "Setting up Python environment (first run may take a few minutes)..."
+    progress_dialog "Setting up Abramelin (first run)... This may take a few minutes."
+
+    # Find Python 3.12
+    PYTHON_CMD=""
+    for cmd in python3.12 /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12; do
+        if command -v "$cmd" &>/dev/null; then
+            PY_VERSION=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
+            if [[ "$PY_VERSION" == "3.12" ]]; then
+                PYTHON_CMD="$cmd"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "$PYTHON_CMD" ]]; then
+        error_dialog "Python 3.12 is required but not found. Please install Python 3.12 via Homebrew:\n\nbrew install python@3.12"
+        exit 1
+    fi
+
+    log "Using Python: $PYTHON_CMD"
+
+    # Remove old venv if exists
+    rm -rf "$VENV_DIR" 2>/dev/null || true
+
+    # Create virtual environment
+    log "Creating virtual environment..."
+    "$PYTHON_CMD" -m venv "$VENV_DIR" >> "$LOG_FILE" 2>&1
+
+    # Upgrade pip
+    log "Upgrading pip..."
+    "$VENV_DIR/bin/pip" install --upgrade pip >> "$LOG_FILE" 2>&1
+
+    # Install dependencies
+    log "Installing dependencies (this may take several minutes)..."
+
+    # Core dependencies - install in order to handle complex deps
+    "$VENV_DIR/bin/pip" install torch torchvision >> "$LOG_FILE" 2>&1 || {
+        error_dialog "Failed to install PyTorch. Check logs at:\n$LOG_FILE"
+        exit 1
+    }
+
+    log "Installing MLX..."
+    "$VENV_DIR/bin/pip" install mlx mlx-lm >> "$LOG_FILE" 2>&1 || {
+        error_dialog "Failed to install MLX. Check logs at:\n$LOG_FILE"
+        exit 1
+    }
+
+    log "Installing web framework..."
+    "$VENV_DIR/bin/pip" install fastapi uvicorn websockets >> "$LOG_FILE" 2>&1
+
+    log "Installing ESM dependencies..."
+    "$VENV_DIR/bin/pip" install \
+        transformers einops biotite biopython scikit-learn \
+        brotli attrs pandas cloudpathlib httpx tenacity zstd \
+        ipywidgets py3dmol pydssp boto3 pygtrie msgpack-numpy \
+        torchtext >> "$LOG_FILE" 2>&1 || {
+        error_dialog "Failed to install dependencies. Check logs at:\n$LOG_FILE"
+        exit 1
+    }
+
+    # Note: ESM package is loaded via PYTHONPATH, no install needed
+
+    log "Setup complete!"
+    info_dialog "Abramelin setup complete! The app will now launch.\n\nNote: On first generation, the ESM3 model will be downloaded (~5GB)."
+fi
+
+# Launch the server
+log "Launching Abramelin server..."
+
+# Set environment variables - ESM package is in RESOURCES_DIR (parent of esm/)
+export PYTHONPATH="$RESOURCES_DIR:$PYTHONPATH"
+export HF_HOME="$HOME/.cache/huggingface"  # Use standard HF cache location
+
+cd "$RESOURCES_DIR"
+log "Working directory: $(pwd)"
+log "PYTHONPATH: $PYTHONPATH"
+
+# Start the server in background
+"$VENV_DIR/bin/python" -m esm.web.app >> "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+log "Server started with PID: $SERVER_PID"
+
+# Wait for server to be ready
+log "Waiting for server to start..."
+MAX_WAIT=120
+WAIT_COUNT=0
+while ! curl -s http://localhost:8000/api/status >/dev/null 2>&1; do
+    sleep 1
+    WAIT_COUNT=$((WAIT_COUNT + 1))
+    if [[ $WAIT_COUNT -ge $MAX_WAIT ]]; then
+        error_dialog "Server failed to start within $MAX_WAIT seconds. Check logs at:\n$LOG_FILE"
+        kill $SERVER_PID 2>/dev/null || true
+        exit 1
+    fi
+    # Check if process is still running
+    if ! kill -0 $SERVER_PID 2>/dev/null; then
+        error_dialog "Server process terminated unexpectedly. Check logs at:\n$LOG_FILE"
+        exit 1
+    fi
+done
+
+log "Server is ready!"
+
+# Open browser
+log "Opening browser..."
+open "http://localhost:8000"
+
+# Save PID for later cleanup
+echo $SERVER_PID > "$LOG_DIR/server.pid"
+
+# Wait for server process (keeps the app "running" in Dock)
+wait $SERVER_PID

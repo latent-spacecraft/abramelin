@@ -21,28 +21,44 @@ classifiers = [
 ]
 
 dependencies = [
+  # Core ML
   "torch>=2.2.0",
   "torchvision",
   "torchtext",
   "transformers<4.53.0",
-  "ipython",
   "einops",
+
+  # MLX (Apple Silicon)
+  "mlx>=0.21.0",
+  "mlx-lm>=0.19.0",
+
+  # Web interface
+  "fastapi>=0.115.0",
+  "uvicorn>=0.32.0",
+  "websockets>=14.0",
+
+  # Bioinformatics
   "biotite>=1.0.0",
-  "msgpack-numpy",
   "biopython",
+  "pydssp",
+
+  # Data processing
+  "msgpack-numpy",
   "scikit-learn",
-  "brotli",
-  "attrs",
   "pandas",
+  "attrs",
+  "brotli",
+  "zstd",
+
+  # Utilities
+  "ipython",
+  "ipywidgets",
+  "py3dmol",
+  "boto3",
+  "pygtrie",
   "cloudpathlib",
   "httpx",
   "tenacity",
-  "zstd",
-  "ipywidgets",
-  "py3dmol",
-  "pydssp",
-  "boto3",
-  "pygtrie",
   "dna_features_viewer",
 ]
 # Pytest

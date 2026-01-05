@@ -1,0 +1,26 @@
+#!/bin/bash
+# Abramelin Preinstall Script
+# Runs before the package is installed
+
+set -e
+
+# Stop running Abramelin server if any
+PID_FILE="$HOME/Library/Logs/Abramelin/server.pid"
+if [[ -f "$PID_FILE" ]]; then
+    OLD_PID=$(cat "$PID_FILE")
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Stopping existing Abramelin server (PID: $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 2
+    fi
+    rm -f "$PID_FILE"
+fi
+
+# Remove old installation if exists (preserve user data)
+OLD_APP="/Applications/Abramelin.app"
+if [[ -d "$OLD_APP" ]]; then
+    echo "Removing previous installation..."
+    rm -rf "$OLD_APP"
+fi
+
+exit 0

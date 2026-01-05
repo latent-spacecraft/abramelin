@@ -87,6 +87,11 @@ class ProteinAlchemyApp {
             this._showLoadDialog();
         });
 
+        // Copy FASTA button
+        document.getElementById('copy-fasta-btn').addEventListener('click', () => {
+            this._copyFasta();
+        });
+
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey && !this.isGenerating) {
@@ -205,13 +210,36 @@ class ProteinAlchemyApp {
     }
 
     /**
+     * Sanitize a sequence - remove whitespace and invalid characters
+     */
+    _sanitizeSequence(sequence) {
+        // Remove all whitespace (spaces, tabs, newlines, carriage returns)
+        let cleaned = sequence.replace(/\s+/g, '');
+
+        // Keep only valid amino acids and mask character
+        // Standard amino acids: ACDEFGHIKLMNPQRSTVWY
+        // Mask character: _
+        cleaned = cleaned.replace(/[^ACDEFGHIKLMNPQRSTVWY_]/gi, '');
+
+        return cleaned.toUpperCase();
+    }
+
+    /**
      * Load a sequence
      */
     _loadSequence(sequence, plddt = null) {
-        window.maskSync.setSequence(sequence);
-        window.sequenceBar.render(sequence, plddt || []);
+        // Sanitize input - remove whitespace and invalid characters
+        const cleanedSequence = this._sanitizeSequence(sequence);
 
-        this._setStatus('ready', `Loaded sequence: ${sequence.length} residues`);
+        if (cleanedSequence.length === 0) {
+            this._setStatus('error', 'No valid amino acids in sequence');
+            return;
+        }
+
+        window.maskSync.setSequence(cleanedSequence);
+        window.sequenceBar.render(cleanedSequence, plddt || []);
+
+        this._setStatus('ready', `Loaded sequence: ${cleanedSequence.length} residues`);
     }
 
     /**
@@ -588,12 +616,53 @@ class ProteinAlchemyApp {
             <span class="tag-coverage">${coverage}%</span>
         `;
 
-        tag.title = `${annotation.label}\n${annotation.count || 1} region(s), ${coverage}% coverage\nClick to highlight`;
+        tag.title = `${annotation.label}\n${annotation.count || 1} region(s), ${coverage}% coverage\nHover to see in 3D, click to highlight`;
 
-        // Click to highlight all regions
+        // Get all residue indices for this annotation
+        const getIndices = () => {
+            const indices = [];
+            if (annotation.regions) {
+                annotation.regions.forEach(([start, end]) => {
+                    for (let i = start - 1; i < end; i++) {
+                        indices.push(i);
+                    }
+                });
+            } else if (annotation.start && annotation.end) {
+                for (let i = annotation.start - 1; i < annotation.end; i++) {
+                    indices.push(i);
+                }
+            }
+            return indices;
+        };
+
+        // Hover to highlight in 3D with side chains
+        tag.addEventListener('mouseenter', () => {
+            const indices = getIndices();
+            if (indices.length > 0) {
+                // Highlight in 3D viewer with side chains
+                window.viewer3d.highlightResiduesWithSideChains(indices);
+
+                // Also highlight in sequence bar
+                indices.forEach(idx => {
+                    const residue = document.querySelector(`.residue[data-index="${idx}"]`);
+                    if (residue) residue.classList.add('highlighted');
+                });
+            }
+        });
+
+        tag.addEventListener('mouseleave', () => {
+            // Clear 3D highlights
+            window.viewer3d.clearHighlights();
+
+            // Clear sequence bar highlights
+            document.querySelectorAll('.residue.highlighted').forEach(el => {
+                el.classList.remove('highlighted');
+            });
+        });
+
+        // Click to keep highlight persistent (existing behavior)
         tag.addEventListener('click', () => {
             if (annotation.regions) {
-                // Highlight all regions for this label
                 annotation.regions.forEach(([start, end]) => {
                     this._highlightRange(start - 1, end - 1);
                 });
@@ -622,12 +691,54 @@ class ProteinAlchemyApp {
      */
     _showLoadDialog() {
         const sequence = prompt(
-            'Enter a protein sequence (use _ for masked positions):',
+            'Enter a protein sequence (use _ for masked positions):\nWhitespace and invalid characters will be removed automatically.',
             'MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQQIAAALEHHHHHH'
         );
 
         if (sequence) {
-            this._loadSequence(sequence.toUpperCase());
+            this._loadSequence(sequence);  // _loadSequence handles sanitization
+        }
+    }
+
+    /**
+     * Copy sequence to clipboard in FASTA format
+     */
+    async _copyFasta() {
+        const sequence = window.maskSync.sequence;
+        if (!sequence) {
+            this._setStatus('error', 'No sequence to copy');
+            return;
+        }
+
+        // Generate FASTA header with timestamp
+        const timestamp = new Date().toISOString().split('T')[0];
+        const header = `>Abramelin_${timestamp}_${sequence.length}aa`;
+
+        // Format sequence with 60 chars per line (standard FASTA)
+        const lines = [header];
+        for (let i = 0; i < sequence.length; i += 60) {
+            lines.push(sequence.substring(i, i + 60));
+        }
+        const fasta = lines.join('\n');
+
+        try {
+            await navigator.clipboard.writeText(fasta);
+
+            // Visual feedback
+            const btn = document.getElementById('copy-fasta-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            btn.classList.add('copied');
+
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.classList.remove('copied');
+            }, 2000);
+
+            this._setStatus('ready', `Copied ${sequence.length} residues as FASTA`);
+        } catch (err) {
+            this._setStatus('error', 'Failed to copy to clipboard');
+            console.error('Clipboard error:', err);
         }
     }
 }
