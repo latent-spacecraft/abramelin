@@ -16,7 +16,7 @@ A fork of [EvolutionaryScale's ESM3](https://github.com/evolutionaryscale/esm) o
 ### One-Line Install (Apple Silicon)
 
 ```bash
-pip install git+https://github.com/gtaghon/abramelin.git && python -m esm.web.app
+pip install git+https://github.com/latent-spacecraft/abramelin.git && python -m esm.web.app
 ```
 
 Then open http://localhost:8000 in your browser.
