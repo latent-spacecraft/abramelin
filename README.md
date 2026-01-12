@@ -11,8 +11,13 @@
 
 A fork of [EvolutionaryScale's ESM3](https://github.com/evolutionaryscale/esm) optimized for **Apple Silicon** with an interactive web interface for protein design. Generate sequences, predict structures, and explore conformational ensembles—all running locally on your Mac.
 
-## Quickstart
+## Quickstart (Requires *Python3.12*, Apple Silicon)
 
+```bash
+# Create a virtual env to store Abramelin, then activate it.
+python3.12 -m venv abramelin
+. ./abramelin/bin/activate
+```
 ### One-Line Install (Apple Silicon)
 
 ```bash
