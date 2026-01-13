@@ -21,7 +21,7 @@ python3.12 -m venv abramelin
 ### Install from Source
 
 ```bash
-git clone https://github.com/gtaghon/abramelin.git
+git clone https://github.com/latent-spacecraft/abramelin.git
 cd abramelin
 pip install -e .
 
